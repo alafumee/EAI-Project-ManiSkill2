@@ -90,7 +90,7 @@ def main():
     rollout_steps = 4800
 
     obs_mode = "state"
-    control_mode = "pd_ee_delta_pose"
+    control_mode = "base_pd_joint_vel_arm_pd_ee_delta_pose"
     reward_mode = "normalized_dense"
     if args.seed is not None:
         set_random_seed(args.seed)

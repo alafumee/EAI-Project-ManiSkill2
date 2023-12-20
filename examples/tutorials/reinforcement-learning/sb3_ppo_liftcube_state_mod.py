@@ -9,6 +9,8 @@ from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor
+from custom_feature_extractor import CustomExtracor
+from ppo_rep import PPO_Rep
 
 import mani_skill2.envs
 from mani_skill2.utils.wrappers import RecordEpisode
@@ -150,19 +152,19 @@ def main():
         env.reset()
 
     # Define the policy configuration and algorithm configuration
-    policy_kwargs = dict(net_arch=[256, 256])
-    model = PPO(
+    policy_kwargs = dict(net_arch=[128, 256], features_extractor_class=CustomExtracor, features_extractor_kwargs=dict(features_dim=32))
+    model = PPO_Rep(
         "MlpPolicy",
         env,
         policy_kwargs=policy_kwargs,
         verbose=1,
         n_steps=rollout_steps // num_envs,
-        batch_size=400,
+        batch_size=300,
         gamma=0.8,
         n_epochs=15,
         tensorboard_log=log_dir,
         target_kl=0.05,
-        use_sde=True,
+        recons_coeff=0.0,
     )
 
     if args.eval:

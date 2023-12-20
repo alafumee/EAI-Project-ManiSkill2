@@ -4,7 +4,7 @@ import os.path as osp
 
 import gymnasium as gym
 import numpy as np
-from stable_baselines3 import PPO
+from stable_baselines3 import PPO, SAC, TD3
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.utils import set_random_seed
@@ -151,18 +151,15 @@ def main():
 
     # Define the policy configuration and algorithm configuration
     policy_kwargs = dict(net_arch=[256, 256])
-    model = PPO(
+    model = TD3(
         "MlpPolicy",
         env,
         policy_kwargs=policy_kwargs,
         verbose=1,
-        n_steps=rollout_steps // num_envs,
         batch_size=400,
         gamma=0.8,
-        n_epochs=15,
         tensorboard_log=log_dir,
-        target_kl=0.05,
-        use_sde=True,
+        train_freq=1,
     )
 
     if args.eval:
@@ -204,7 +201,7 @@ def main():
         deterministic=True,
         render=False,
         return_episode_rewards=True,
-        n_eval_episodes=50,
+        n_eval_episodes=10,
     )
     print("Returns", returns)
     print("Episode Lengths", ep_lens)
