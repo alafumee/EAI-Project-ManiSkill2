@@ -1,17 +1,23 @@
 # Import required packages
 import argparse
+from collections import OrderedDict
 import os.path as osp
+from typing import Any
 
 import gymnasium as gym
+from gymnasium.core import Env
 import numpy as np
-from stable_baselines3 import PPO, SAC, TD3
+from stable_baselines3 import PPO, SAC, TD3, HerReplayBuffer
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor
 
 import mani_skill2.envs
+from mani_skill2.utils.common import convert_observation_to_space, flatten_state_dict
 from mani_skill2.utils.wrappers import RecordEpisode
+from stable_baselines3.common.envs import BitFlippingEnv
+
 
 
 # Defines a continuous, infinite horizon, task where terminated is always False
@@ -30,17 +36,76 @@ class ContinuousTaskWrapper(gym.Wrapper):
 
 # A simple wrapper that adds a is_success key which SB3 tracks
 class SuccessInfoWrapper(gym.Wrapper):
+    def __init__(self, env: Env):
+        super().__init__(env)
+    
     def step(self, action):
         ob, rew, terminated, truncated, info = super().step(action)
         info["is_success"] = info["success"]
         return ob, rew, terminated, truncated, info
 
 
+def format_observation(ob):
+    new_ob = OrderedDict(
+            observation=flatten_state_dict(ob["agent"])
+        )
+    obj_goal_pos = ob["extra"]["goal_pos"]
+    obj_pos = ob["extra"]["goal_pos"] - ob["extra"]["obj_to_goal_pos"]
+    robot_qvel = ob["agent"]["qvel"][:-2]
+    goal_qvel = np.zeros_like(robot_qvel)
+    desired_goal = np.hstack([obj_goal_pos, goal_qvel])
+    achieved_goal = np.hstack([obj_pos, robot_qvel])
+    new_ob.update(desired_goal=desired_goal, achieved_goal=achieved_goal)
+    return new_ob
+
+
+class PickCubeHERWrapper(gym.Wrapper):
+    def __init__(self, env):
+        super().__init__(env)
+        
+    def step(self, action):
+        ob, rew, terminated, truncated, info = super().step(action)
+        assert isinstance(ob, dict)
+        new_ob = format_observation(ob)
+        new_rew = 2 * rew - 1.0
+        return new_ob, new_rew, terminated, truncated, info
+    
+    def reset(self, *args, **kwargs):
+        ob, info = super().reset(*args, **kwargs)
+        new_ob = format_observation(ob)
+        return new_ob, info
+    
+    def compute_reward(self, achieved_goal, desired_goal, info):
+        thresh = 0.2
+        if len(achieved_goal.shape) == 1:
+            batch_size = 1
+            goal_pos = desired_goal[:3]
+            obj_pos = achieved_goal[:3]
+            robot_qvel = achieved_goal[3:]
+            goal_qvel = desired_goal[3:]
+            is_obj_placed = np.linalg.norm(goal_pos - obj_pos) <= self.env.goal_thresh
+            is_robot_static = np.max(np.abs(robot_qvel - goal_qvel)) <= thresh
+            reward = 2 * float(is_obj_placed and is_robot_static) - 1.0
+        else:
+            batch_size = achieved_goal.shape[0]
+            goal_pos = desired_goal[:, :3]
+            obj_pos = achieved_goal[:, :3]
+            robot_qvel = achieved_goal[:, 3:]
+            goal_qvel = desired_goal[:, 3:]
+            is_obj_placed = np.linalg.norm(goal_pos - obj_pos, axis=-1) <= self.env.goal_thresh
+            is_robot_static = np.max(np.abs(robot_qvel - goal_qvel), axis=-1) <= thresh
+            reward = 2 * np.logical_and(is_obj_placed, is_robot_static).astype(np.float32) - 1.0 
+        return reward
+    
+    def update_observation_space(self):
+        obs, _ = self.reset(seed=2023)
+        self.env.observation_space = convert_observation_to_space(obs)
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Simple script demonstrating how to use Stable Baselines 3 with ManiSkill2 and RGBD Observations"
     )
-    parser.add_argument("-e", "--env-id", type=str, default="LiftCube-v0")
+    parser.add_argument("-e", "--env-id", type=str, default="PickCube-v0")
     parser.add_argument(
         "-n",
         "--n-envs",
@@ -89,9 +154,9 @@ def main():
     log_dir = args.log_dir
     rollout_steps = 4800
 
-    obs_mode = "state"
+    obs_mode = "state_dict"
     control_mode = "pd_ee_delta_pose"
-    reward_mode = "normalized_dense"
+    reward_mode = "sparse"
     if args.seed is not None:
         set_random_seed(args.seed)
 
@@ -114,6 +179,8 @@ def main():
             )
             # For training, we regard the task as a continuous task with infinite horizon.
             # you can use the ContinuousTaskWrapper here for that
+            env = PickCubeHERWrapper(env)
+            env.update_observation_space()
             if max_episode_steps is not None:
                 env = ContinuousTaskWrapper(env)
             if record_dir is not None:
@@ -151,8 +218,9 @@ def main():
 
     # Define the policy configuration and algorithm configuration
     policy_kwargs = dict(net_arch=[256, 256])
+    goal_selection_strategy = "future"
     model = TD3(
-        "MlpPolicy",
+        "MultiInputPolicy",
         env,
         policy_kwargs=policy_kwargs,
         verbose=1,
@@ -160,6 +228,12 @@ def main():
         gamma=0.8,
         tensorboard_log=log_dir,
         train_freq=50,
+        replay_buffer_class=HerReplayBuffer,
+        replay_buffer_kwargs=dict(
+            n_sampled_goal=2,
+            goal_selection_strategy=goal_selection_strategy,
+        ),
+        learning_starts=100,
     )
 
     if args.eval:

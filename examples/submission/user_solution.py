@@ -7,8 +7,8 @@ class UserPolicy(BasePolicy):
 
     @classmethod
     def get_obs_mode(cls, env_id: str) -> str:
-        return "rgbd"
+        return "state_dict"
 
     @classmethod
     def get_control_mode(cls, env_id: str) -> str:
-        return "pd_joint_delta_pos"
+        return "pd_ee_delta_pos"
