@@ -151,3 +151,6 @@ If you use ManiSkill2 or its assets and models, consider citing the following pu
   year={2023}
 }
 ```
+
+## EAI Project
+In this course project, we introduce HER to several state-based manipulation tasks with dense reward. Our modified code can be found in the `examples/tutorials/reinforcement-learning` directory.
